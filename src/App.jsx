@@ -72,6 +72,12 @@ const genEmail = (pays,sups,cfg) => {
   return t+`─────────────────────────────\nTOTAL: ${formatCLP(total)}\n\n${cfg.firma}`;
 };
 
+const genEmailHTML = (pays,sups,cfg) => {
+  const total=pays.reduce((s,p)=>s+p.monto,0);
+  const rows=pays.map(p=>{const s=sups.find(x=>cleanRut(x.rut)===cleanRut(p.rut));return`<tr><td style="padding:6px 10px;border:1px solid #bbb;font-size:13px">${s?.nombre||p.rut}</td><td style="padding:6px 10px;border:1px solid #bbb;font-size:13px">${p.detalle}</td><td style="padding:6px 10px;border:1px solid #bbb;text-align:right;font-size:13px">$ ${Number(p.monto).toLocaleString("es-CL")}</td></tr>`;}).join("");
+  return`<div style="font-family:Arial,sans-serif"><p>${cfg.saludo}</p><p>Adjunto detalle de nómina para su autorización:</p><table style="border-collapse:collapse;width:100%;margin:12px 0"><tr style="background:#1a1a1a;color:#fff"><td style="padding:8px 10px;font-weight:bold;font-size:14px" colspan="2">NOMINA PAGOS</td><td style="padding:8px 10px;text-align:right;font-size:14px;color:#fff">${todayStr()}</td></tr><tr style="background:#333;color:#fff"><td style="padding:6px 10px;font-weight:bold;font-size:13px">Proveedor</td><td style="padding:6px 10px;font-weight:bold;font-size:13px">DETALLE</td><td style="padding:6px 10px;font-weight:bold;text-align:right;font-size:13px">Monto</td></tr>${rows}<tr style="background:#1a1a1a;color:#fff"><td style="padding:8px 10px;font-size:14px" colspan="2"><strong>Total</strong></td><td style="padding:8px 10px;text-align:right;font-weight:bold;font-size:14px">$ ${Number(total).toLocaleString("es-CL")}</td></tr></table><p>${cfg.firma.replace(/\n/g,"<br>")}</p></div>`;
+};
+
 const parseCSV = (text) => {
   const lines=text.split("\n").filter(l=>l.trim()); if(lines.length<2)return[];
   return lines.slice(1).map(line=>{const c=line.split(",").map(x=>x.trim().replace(/^"|"$/g,"")); if(c.length<7||!c[0])return null;
@@ -81,7 +87,8 @@ const parseCSV = (text) => {
 
 function SupSearch({suppliers,onSelect,placeholder}){
   const[q,setQ]=useState("");const[open,setOpen]=useState(false);const ref=useRef(null);
-  const fil=useMemo(()=>{if(!q||q.length<2)return[];const lq=q.toLowerCase();return suppliers.filter(s=>s.nombre.toLowerCase().includes(lq)||cleanRut(s.rut).includes(cleanRut(q))).slice(0,12);},[q,suppliers]);
+  const norm=s=>(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ").trim();
+  const fil=useMemo(()=>{if(!q||q.length<1)return[];const words=norm(q).split(" ").filter(w=>w);return suppliers.filter(s=>{const n=norm(s.nombre);return words.every(w=>n.includes(w))||cleanRut(s.rut).includes(cleanRut(q));}).slice(0,15);},[q,suppliers]);
   useEffect(()=>{const h=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h);},[]);
   return(<div ref={ref} className="ssrc"><div style={{position:"relative"}}><Search size={16} className="sico"/><input type="text" value={q} onChange={e=>{setQ(e.target.value);setOpen(true);}} onFocus={()=>setOpen(true)} placeholder={placeholder} className="inp" style={{paddingLeft:38}}/></div>
     {open&&fil.length>0&&<div className="dd">{fil.map((s,i)=><div key={i} className="ddi" onClick={()=>{onSelect(s);setQ(s.nombre);setOpen(false);}}><div><div className="tp" style={{fontSize:13,fontWeight:500}}>{s.nombre}</div><div className="tm" style={{fontSize:11,marginTop:2}}>{formatRut(s.rut)} · {BANK_MAP[s.codigoBanco]?.name||`Banco ${s.codigoBanco}`} · {s.tipoCuenta}</div></div><div className="tm" style={{fontSize:11}}>Cta: {s.numeroCuenta}</div></div>)}</div>}
@@ -128,7 +135,7 @@ export default function App(){
   const totalR=useMemo(()=>pays.reduce((s,p)=>s+splitAmount(p.monto).length,0),[pays]);
 
   const dlTXT=()=>{if(!pays.length)return;const t=genTXT(pays,sups,cfg);const b=new Blob([t],{type:"text/plain;charset=utf-8"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;const d=new Date();a.download=`nomina_prov_${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}.txt`;a.click();URL.revokeObjectURL(u);};
-  const cpEmail=()=>{if(!pays.length)return;navigator.clipboard.writeText(genEmail(pays,sups,cfg)).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2500);});};
+  const cpEmail=()=>{if(!pays.length)return;const html=genEmailHTML(pays,sups,cfg);const plain=genEmail(pays,sups,cfg);try{navigator.clipboard.write([new ClipboardItem({"text/html":new Blob([html],{type:"text/html"}),"text/plain":new Blob([plain],{type:"text/plain"})})]).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2500);});}catch(e){navigator.clipboard.writeText(plain).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2500);});}};
 
   const addSup=async()=>{
     setMsg({t:"",x:""});const rut=cleanRut(ns.rut);
@@ -285,7 +292,7 @@ export default function App(){
                 <button className="bs" onClick={()=>setShowMail(!showMail)}><Mail size={16}/>Email</button>
               </div>
               {showTxt&&<div className="cd" style={{marginTop:14,marginBottom:0}}><div className="cdt">Vista previa TXT:</div><pre style={{color:"#8B9AAF",fontSize:11,whiteSpace:"pre-wrap",wordBreak:"break-all",lineHeight:1.6}}>{genTXT(pays,sups,cfg)}</pre></div>}
-              {showMail&&<div className="cd" style={{marginTop:14,marginBottom:0}}><div className="cdt">Correo:</div><div className="tm" style={{fontSize:12,marginBottom:2}}>Para: {cfg.para}</div><div className="tm" style={{fontSize:12,marginBottom:8}}>CC: {cfg.cc}</div><pre style={{color:"#C9D5E8",fontSize:12,whiteSpace:"pre-wrap",lineHeight:1.7,fontFamily:"inherit"}}>{genEmail(pays,sups,cfg)}</pre></div>}
+              {showMail&&<div className="cd" style={{marginTop:14,marginBottom:0}}><div className="cdt">Correo:</div><div className="tm" style={{fontSize:12,marginBottom:2}}>Para: {cfg.para}</div><div className="tm" style={{fontSize:12,marginBottom:8}}>CC: {cfg.cc}</div><div style={{background:"#fff",borderRadius:6,padding:16}} dangerouslySetInnerHTML={{__html:genEmailHTML(pays,sups,cfg)}}/></div>}
             </>}
           </div>}
 
