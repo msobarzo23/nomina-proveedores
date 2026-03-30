@@ -48,6 +48,10 @@ const api = {
   async list(url){ const r=await fetch(url+"?action=list"); const d=await r.json(); if(d.error)throw new Error(d.error); return Array.isArray(d)?d:[]; },
   async add(url,sup){ const r=await fetch(url,{method:"POST",body:JSON.stringify({action:"add",...sup}),redirect:"follow"}); return await r.json(); },
   async del(url,rut){ const r=await fetch(url,{method:"POST",body:JSON.stringify({action:"delete",rut}),redirect:"follow"}); return await r.json(); },
+  async payments(url){ const r=await fetch(url+"?action=payments"); const d=await r.json(); if(d.error)throw new Error(d.error); return Array.isArray(d)?d:[]; },
+  async addPay(url,p){ const r=await fetch(url,{method:"POST",body:JSON.stringify({action:"addPayment",...p}),redirect:"follow"}); return await r.json(); },
+  async rmPay(url,id){ const r=await fetch(url,{method:"POST",body:JSON.stringify({action:"removePayment",id}),redirect:"follow"}); return await r.json(); },
+  async clearPays(url){ const r=await fetch(url,{method:"POST",body:JSON.stringify({action:"clearPayments"}),redirect:"follow"}); return await r.json(); },
 };
 
 const genTXT = (pays,sups,cfg) => {
@@ -122,15 +126,26 @@ export default function App(){
   const refresh=useCallback(async()=>{
     if(!cfg.googleSheetsUrl){setConn(false);return;}
     setSyncing(true);setSyncErr("");
-    try{const d=await api.list(cfg.googleSheetsUrl);setSups(d);saveCache(d);setConn(true);}
+    try{
+      const d=await api.list(cfg.googleSheetsUrl);setSups(d);saveCache(d);
+      const p=await api.payments(cfg.googleSheetsUrl);setPays(p);
+      setConn(true);
+    }
     catch(e){setSyncErr(e.message);setConn(false);const c=loadCache();if(c.length>0&&sups.length===0)setSups(c);}
     finally{setSyncing(false);}
   },[cfg.googleSheetsUrl]);
 
   useEffect(()=>{if(cfg.googleSheetsUrl)refresh();},[cfg.googleSheetsUrl]);
 
-  const addPay=()=>{if(!sel||!monto||!det)return;const m=Number(String(monto).replace(/\D/g,""));if(m<=0)return;setPays(p=>[...p,{rut:sel.rut,detalle:det.toUpperCase(),monto:m}]);setSel(null);setMonto("");setDet("");};
-  const rmPay=(i)=>setPays(p=>p.filter((_,j)=>j!==i));
+  // Auto-refresh payments every 30 seconds
+  useEffect(()=>{if(!conn||!cfg.googleSheetsUrl)return;const iv=setInterval(async()=>{try{const p=await api.payments(cfg.googleSheetsUrl);setPays(p);}catch{}},30000);return()=>clearInterval(iv);},[conn,cfg.googleSheetsUrl]);
+
+  const addPay=async()=>{if(!sel||!monto||!det)return;const m=Number(String(monto).replace(/\D/g,""));if(m<=0)return;
+    if(conn&&cfg.googleSheetsUrl){try{await api.addPay(cfg.googleSheetsUrl,{rut:sel.rut,detalle:det.toUpperCase(),monto:m});const p=await api.payments(cfg.googleSheetsUrl);setPays(p);}catch(e){setPays(p=>[...p,{id:"local_"+Date.now(),rut:sel.rut,detalle:det.toUpperCase(),monto:m}]);}}
+    else{setPays(p=>[...p,{id:"local_"+Date.now(),rut:sel.rut,detalle:det.toUpperCase(),monto:m}]);}
+    setSel(null);setMonto("");setDet("");};
+  const rmPay=async(id)=>{if(conn&&cfg.googleSheetsUrl){try{await api.rmPay(cfg.googleSheetsUrl,id);const p=await api.payments(cfg.googleSheetsUrl);setPays(p);}catch{setPays(p=>p.filter(x=>x.id!==id));}}else{setPays(p=>p.filter((_,j)=>j!==Number(id)));}};
+  const clearAllPays=async()=>{if(!confirm("¿Limpiar toda la nómina?"))return;if(conn&&cfg.googleSheetsUrl){try{await api.clearPays(cfg.googleSheetsUrl);setPays([]);}catch{setPays([]);}}else{setPays([]);}};
   const totalP=useMemo(()=>pays.reduce((s,p)=>s+p.monto,0),[pays]);
   const totalR=useMemo(()=>pays.reduce((s,p)=>s+splitAmount(p.monto).length,0),[pays]);
 
@@ -147,13 +162,13 @@ export default function App(){
     if(conn&&cfg.googleSheetsUrl){
       setAdding(true);
       try{const r=await api.add(cfg.googleSheetsUrl,sd);
-        if(!r.success){if(r.error==="RUT_DUPLICADO"){const e=r.existing;setMsg({t:"e",x:`⚠️ RUT ya existe: ${e.nombre} — ${BANK_MAP[e.codigoBanco]?.name||""} ${e.tipoCuenta} Cta: ${e.numeroCuenta}`});}else{setMsg({t:"e",x:r.error||"Error"});}setAdding(false);return;}
-        await refresh();setMsg({t:"s",x:`✓ ${sd.nombre} guardado en Google Sheets`});
+        if(!r.success){if(r.error==="RUT_DUPLICADO"||r.error==="DUPLICADO_EXACTO"){const e=r.existing;setMsg({t:"e",x:`⚠️ Ya existe: ${e.nombre} — ${BANK_MAP[e.codigoBanco]?.name||""} ${e.tipoCuenta} Cta: ${e.numeroCuenta}`});}else{setMsg({t:"e",x:r.error||"Error"});}setAdding(false);return;}
+        await refresh();setMsg({t:"s",x:r.message||`✓ ${sd.nombre} guardado en Google Sheets`});
       }catch(e){setMsg({t:"e",x:`Error: ${e.message}`});setAdding(false);return;}
       setAdding(false);
     }else{
-      const ex=sups.find(s=>cleanRut(s.rut)===rut);
-      if(ex){setMsg({t:"e",x:`⚠️ RUT ya existe: ${ex.nombre} — ${BANK_MAP[ex.codigoBanco]?.name||""} Cta: ${ex.numeroCuenta}`});return;}
+      const ex=sups.find(s=>cleanRut(s.rut)===rut&&Number(s.codigoBanco)===Number(sd.codigoBanco)&&String(s.numeroCuenta).trim()===sd.numeroCuenta);
+      if(ex){setMsg({t:"e",x:`⚠️ Ya existe: ${ex.nombre} — ${BANK_MAP[ex.codigoBanco]?.name||""} Cta: ${ex.numeroCuenta}`});return;}
       const u=[...sups,sd];setSups(u);saveCache(u);setMsg({t:"s",x:`✓ ${sd.nombre} agregado (local)`});
     }
     setNs({rut:"",nombre:"",codigoBanco:1,tipoCuenta:"Cuenta Corriente",numeroCuenta:"",email:""});
@@ -237,7 +252,7 @@ export default function App(){
           {tab==="nomina"&&<div>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
               <h2 style={{fontSize:16,fontWeight:700,display:"flex",alignItems:"center",gap:8}}><FileText size={18} color="#E8952F"/>Nómina del {todayStr()}</h2>
-              {pays.length>0&&<button className="bs" style={{padding:"6px 12px",fontSize:12}} onClick={()=>{if(confirm("¿Limpiar?"))setPays([]);}}><Trash2 size={13}/>Limpiar</button>}
+              {pays.length>0&&<button className="bs" style={{padding:"6px 12px",fontSize:12}} onClick={clearAllPays}><Trash2 size={13}/>Limpiar</button>}
             </div>
 
             <div className="cd">
@@ -274,7 +289,7 @@ export default function App(){
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:12}}>
                     <span className="tg" style={{fontWeight:700,fontSize:15,fontVariantNumeric:"tabular-nums"}}>{formatCLP(p.monto)}</span>
-                    <button className="ib" onClick={()=>rmPay(i)}><Trash2 size={15}/></button>
+                    <button className="ib" onClick={()=>rmPay(p.id)}><Trash2 size={15}/></button>
                   </div>
                 </div></div>);})}
 
