@@ -88,7 +88,7 @@ const parseCSV = (text) => {
 function SupSearch({suppliers,onSelect,placeholder}){
   const[q,setQ]=useState("");const[open,setOpen]=useState(false);const ref=useRef(null);
   const norm=s=>(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ").trim();
-  const fil=useMemo(()=>{if(!q||q.length<1)return[];const words=norm(q).split(" ").filter(w=>w);return suppliers.filter(s=>{const n=norm(s.nombre);return words.every(w=>n.includes(w))||cleanRut(s.rut).includes(cleanRut(q));}).slice(0,15);},[q,suppliers]);
+  const fil=useMemo(()=>{if(!q||q.length<1)return[];const words=norm(q).split(" ").filter(w=>w);const rutQ=cleanRut(q);return suppliers.filter(s=>{const n=norm(s.nombre);return words.every(w=>n.includes(w))||(rutQ.length>1&&cleanRut(s.rut).includes(rutQ));}).slice(0,15);},[q,suppliers]);
   useEffect(()=>{const h=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h);},[]);
   return(<div ref={ref} className="ssrc"><div style={{position:"relative"}}><Search size={16} className="sico"/><input type="text" value={q} onChange={e=>{setQ(e.target.value);setOpen(true);}} onFocus={()=>setOpen(true)} placeholder={placeholder} className="inp" style={{paddingLeft:38}}/></div>
     {open&&fil.length>0&&<div className="dd">{fil.map((s,i)=><div key={i} className="ddi" onClick={()=>{onSelect(s);setQ(s.nombre);setOpen(false);}}><div><div className="tp" style={{fontSize:13,fontWeight:500}}>{s.nombre}</div><div className="tm" style={{fontSize:11,marginTop:2}}>{formatRut(s.rut)} · {BANK_MAP[s.codigoBanco]?.name||`Banco ${s.codigoBanco}`} · {s.tipoCuenta}</div></div><div className="tm" style={{fontSize:11}}>Cta: {s.numeroCuenta}</div></div>)}</div>}
@@ -170,7 +170,7 @@ export default function App(){
     if(conn&&cfg.googleSheetsUrl){try{await api.del(cfg.googleSheetsUrl,rut);await refresh();}catch(e){alert("Error: "+e.message);}}
     else{const u=sups.filter(x=>cleanRut(x.rut)!==cleanRut(rut));setSups(u);saveCache(u);}};
 
-  const filtSups=useMemo(()=>{if(!supQ||supQ.length<2)return sups.slice(0,50);const q=supQ.toLowerCase();return sups.filter(s=>s.nombre.toLowerCase().includes(q)||cleanRut(s.rut).includes(cleanRut(supQ)));},[supQ,sups]);
+  const filtSups=useMemo(()=>{if(!supQ||supQ.length<2)return sups.slice(0,50);const q=supQ.toLowerCase();const rq=cleanRut(supQ);return sups.filter(s=>s.nombre.toLowerCase().includes(q)||(rq.length>1&&cleanRut(s.rut).includes(rq)));},[supQ,sups]);
 
   const tabData=[{id:"nomina",label:"Nómina",Icon:ClipboardList},{id:"proveedores",label:"Proveedores",Icon:Users},{id:"config",label:"Configuración",Icon:Settings}];
 
