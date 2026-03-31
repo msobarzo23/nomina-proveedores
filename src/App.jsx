@@ -38,8 +38,9 @@ const padBank = (c) => String(c).padStart(3,"0");
 const todayStr = () => { const d=new Date(); return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`; };
 const splitAmount = (a) => { const n=Number(a); if(n<=MAX_TRANSFER)return[n]; const p=[]; let r=n; while(r>MAX_TRANSFER){p.push(MAX_TRANSFER);r-=MAX_TRANSFER;} if(r>0)p.push(r); return p; };
 
+const GOOGLE_SHEETS_URL = "https://script.google.com/macros/s/AKfycbwp0CfH-jxd43_fGBffZxadIt-pKe2q1d0nLtn2D_3mF6hyBrlsyVKEIqQUXCtSbcNk7g/exec";
 const SETTINGS_KEY = "nomina_cfg_v2", CACHE_KEY = "nomina_sup_cache";
-const loadSettings = () => { try{const s=localStorage.getItem(SETTINGS_KEY);if(s)return{...COMPANY_DEFAULTS,...EMAIL_DEFAULTS,googleSheetsUrl:"",...JSON.parse(s)};}catch{} return{...COMPANY_DEFAULTS,...EMAIL_DEFAULTS,googleSheetsUrl:""}; };
+const loadSettings = () => { try{const s=localStorage.getItem(SETTINGS_KEY);if(s)return{...COMPANY_DEFAULTS,...EMAIL_DEFAULTS,googleSheetsUrl:GOOGLE_SHEETS_URL,...JSON.parse(s)};}catch{} return{...COMPANY_DEFAULTS,...EMAIL_DEFAULTS,googleSheetsUrl:GOOGLE_SHEETS_URL}; };
 const saveSettings = (s) => { try{localStorage.setItem(SETTINGS_KEY,JSON.stringify(s));}catch{} };
 const loadCache = () => { try{const s=localStorage.getItem(CACHE_KEY);if(s)return JSON.parse(s);}catch{} return[]; };
 const saveCache = (s) => { try{localStorage.setItem(CACHE_KEY,JSON.stringify(s));}catch{} };
