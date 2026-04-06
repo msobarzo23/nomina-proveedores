@@ -3,7 +3,7 @@ import {
   Search, Plus, Download, Mail, Copy, Check, Trash2, Settings, Users,
   FileText, AlertCircle, X, Upload, RefreshCw,
   Building2, UserPlus, ClipboardList, Eye, Cloud, CloudOff,
-  Loader2, XCircle
+  Loader2, XCircle, Pencil, Save
 } from "lucide-react";
 
 const COMPANY_DEFAULTS = {
@@ -52,6 +52,7 @@ const api = {
   async payments(url){ const r=await fetch(url+"?action=payments"); const d=await r.json(); if(d.error)throw new Error(d.error); return Array.isArray(d)?d:[]; },
   async addPay(url,p){ const r=await fetch(url,{method:"POST",body:JSON.stringify({action:"addPayment",...p}),redirect:"follow"}); return await r.json(); },
   async rmPay(url,id){ const r=await fetch(url,{method:"POST",body:JSON.stringify({action:"removePayment",id}),redirect:"follow"}); return await r.json(); },
+  async updatePay(url,p){ const r=await fetch(url,{method:"POST",body:JSON.stringify({action:"updatePayment",...p}),redirect:"follow"}); return await r.json(); },
   async clearPays(url){ const r=await fetch(url,{method:"POST",body:JSON.stringify({action:"clearPayments"}),redirect:"follow"}); return await r.json(); },
 };
 
@@ -100,6 +101,130 @@ function SupSearch({suppliers,onSelect,placeholder}){
   </div>);
 }
 
+// ─── Inline edit row ──────────────────────────────────────────────────────────
+function PayRow({ p, sups, onRemove, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [editMonto, setEditMonto] = useState("");
+  const [editDet, setEditDet]   = useState("");
+  const [saving, setSaving]     = useState(false);
+  const montoRef = useRef(null);
+
+  const s = sups.find(x => cleanRut(x.rut) === cleanRut(p.rut));
+  const sp = splitAmount(p.monto);
+
+  const startEdit = () => {
+    setEditMonto(String(p.monto));
+    setEditDet(p.detalle);
+    setEditing(true);
+    // focus monto after render
+    setTimeout(() => montoRef.current?.focus(), 50);
+  };
+
+  const cancelEdit = () => setEditing(false);
+
+  const confirmSave = async () => {
+    const m = Number(String(editMonto).replace(/\D/g, ""));
+    if (!m || !editDet.trim()) return;
+    setSaving(true);
+    await onSave(p.id, { monto: m, detalle: editDet.trim().toUpperCase() });
+    setSaving(false);
+    setEditing(false);
+  };
+
+  const handleKey = (e) => {
+    if (e.key === "Enter") confirmSave();
+    if (e.key === "Escape") cancelEdit();
+  };
+
+  return (
+    <div className="pr" style={{ borderColor: editing ? "#4A6FA5" : "#1E2A40", transition: "border-color .2s" }}>
+      {editing ? (
+        /* ── Edit mode ── */
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#E8952F", marginBottom: 10 }}>
+            {s?.nombre || p.rut}
+            <span style={{ color: "#6B7A94", fontWeight: 400, marginLeft: 8 }}>— editando</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10, marginBottom: 10 }}>
+            <div>
+              <label className="lbl">Monto ($)</label>
+              <input
+                ref={montoRef}
+                type="text"
+                value={editMonto}
+                onChange={e => setEditMonto(e.target.value.replace(/\D/g, ""))}
+                className="inp"
+                style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}
+                onKeyDown={handleKey}
+              />
+              {editMonto && Number(editMonto) > MAX_TRANSFER && (
+                <div style={{ color: "#F59E0B", fontSize: 11, marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
+                  <AlertCircle size={11} />Split en {splitAmount(Number(editMonto)).length} transf.
+                </div>
+              )}
+            </div>
+            <div>
+              <label className="lbl">Detalle / Glosa</label>
+              <input
+                type="text"
+                value={editDet}
+                onChange={e => setEditDet(e.target.value)}
+                className="inp"
+                onKeyDown={handleKey}
+              />
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="bp" onClick={confirmSave} disabled={saving || !editMonto || !editDet.trim()} style={{ padding: "7px 16px", fontSize: 12 }}>
+              {saving ? <Loader2 size={13} className="spn" /> : <Save size={13} />}
+              {saving ? "Guardando…" : "Guardar"}
+            </button>
+            <button className="bs" onClick={cancelEdit} style={{ padding: "7px 14px", fontSize: 12 }}>
+              <X size={13} />Cancelar
+            </button>
+          </div>
+        </div>
+      ) : (
+        /* ── View mode ── */
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <span style={{ fontWeight: 600, fontSize: 14 }}>{s?.nombre || p.rut}</span>
+              {sp.length > 1 && <span className="bdg" style={{ background: "#2D1F0E", color: "#F59E0B" }}>SPLIT {sp.length}x</span>}
+            </div>
+            <div className="tm" style={{ fontSize: 12 }}>{p.detalle}</div>
+            {sp.length > 1 && (
+              <div style={{ color: "#4A5568", fontSize: 11, marginTop: 4 }}>
+                Dividido: {sp.map(formatCLP).join(" + ")}
+              </div>
+            )}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span className="tg" style={{ fontWeight: 700, fontSize: 15, fontVariantNumeric: "tabular-nums" }}>
+              {formatCLP(p.monto)}
+            </span>
+            {/* Edit button */}
+            <button
+              className="ib"
+              onClick={startEdit}
+              title="Editar"
+              style={{ color: "#4A6FA5" }}
+              onMouseEnter={e => e.currentTarget.style.color = "#7AABF0"}
+              onMouseLeave={e => e.currentTarget.style.color = "#4A6FA5"}
+            >
+              <Pencil size={14} />
+            </button>
+            {/* Delete button */}
+            <button className="ib" onClick={() => onRemove(p.id)} title="Eliminar">
+              <Trash2 size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App(){
   const[tab,setTab]=useState("nomina");
   const[sups,setSups]=useState(()=>loadCache());
@@ -138,14 +263,46 @@ export default function App(){
 
   useEffect(()=>{if(cfg.googleSheetsUrl)refresh();},[cfg.googleSheetsUrl]);
 
-  // Auto-refresh payments every 30 seconds
   useEffect(()=>{if(!conn||!cfg.googleSheetsUrl)return;const iv=setInterval(async()=>{try{const p=await api.payments(cfg.googleSheetsUrl);setPays(p);}catch{}},30000);return()=>clearInterval(iv);},[conn,cfg.googleSheetsUrl]);
 
-  const addPay=async()=>{if(!sel||!monto||!det)return;const m=Number(String(monto).replace(/\D/g,""));if(m<=0)return;
-    if(conn&&cfg.googleSheetsUrl){try{await api.addPay(cfg.googleSheetsUrl,{rut:sel.rut,detalle:det.toUpperCase(),monto:m});const p=await api.payments(cfg.googleSheetsUrl);setPays(p);}catch(e){setPays(p=>[...p,{id:"local_"+Date.now(),rut:sel.rut,detalle:det.toUpperCase(),monto:m}]);}}
-    else{setPays(p=>[...p,{id:"local_"+Date.now(),rut:sel.rut,detalle:det.toUpperCase(),monto:m}]);}
-    setSel(null);setMonto("");setDet("");};
-  const rmPay=async(id)=>{if(conn&&cfg.googleSheetsUrl){try{await api.rmPay(cfg.googleSheetsUrl,id);const p=await api.payments(cfg.googleSheetsUrl);setPays(p);}catch{setPays(p=>p.filter(x=>x.id!==id));}}else{setPays(p=>p.filter((_,j)=>j!==Number(id)));}};
+  const addPay=async()=>{
+    if(!sel||!monto||!det)return;
+    const m=Number(String(monto).replace(/\D/g,""));
+    if(m<=0)return;
+    if(conn&&cfg.googleSheetsUrl){
+      try{await api.addPay(cfg.googleSheetsUrl,{rut:sel.rut,detalle:det.toUpperCase(),monto:m});const p=await api.payments(cfg.googleSheetsUrl);setPays(p);}
+      catch{setPays(p=>[...p,{id:"local_"+Date.now(),rut:sel.rut,detalle:det.toUpperCase(),monto:m}]);}
+    } else {
+      setPays(p=>[...p,{id:"local_"+Date.now(),rut:sel.rut,detalle:det.toUpperCase(),monto:m}]);
+    }
+    setSel(null);setMonto("");setDet("");
+  };
+
+  const rmPay=async(id)=>{
+    if(conn&&cfg.googleSheetsUrl){
+      try{await api.rmPay(cfg.googleSheetsUrl,id);const p=await api.payments(cfg.googleSheetsUrl);setPays(p);}
+      catch{setPays(p=>p.filter(x=>x.id!==id));}
+    } else {
+      setPays(p=>p.filter(x=>x.id!==id));
+    }
+  };
+
+  // ── Save edited payment ────────────────────────────────────────────────────
+  const savePay = async (id, changes) => {
+    if (conn && cfg.googleSheetsUrl) {
+      try {
+        await api.updatePay(cfg.googleSheetsUrl, { id, ...changes });
+        const p = await api.payments(cfg.googleSheetsUrl);
+        setPays(p);
+      } catch {
+        // Fallback: update locally
+        setPays(p => p.map(x => x.id === id ? { ...x, ...changes } : x));
+      }
+    } else {
+      setPays(p => p.map(x => x.id === id ? { ...x, ...changes } : x));
+    }
+  };
+
   const clearAllPays=async()=>{if(!confirm("¿Limpiar toda la nómina?"))return;if(conn&&cfg.googleSheetsUrl){try{await api.clearPays(cfg.googleSheetsUrl);setPays([]);}catch{setPays([]);}}else{setPays([]);}};
   const totalP=useMemo(()=>pays.reduce((s,p)=>s+p.monto,0),[pays]);
   const totalR=useMemo(()=>pays.reduce((s,p)=>s+splitAmount(p.monto).length,0),[pays]);
@@ -222,7 +379,7 @@ export default function App(){
         .tba{background:#141C2E;border-color:#1E2A40;border-bottom-color:#141C2E;color:#E8952F;font-weight:600}
         .bdg{font-size:10px;padding:1px 6px;border-radius:10px;font-weight:600}
         .es{text-align:center;padding:40px;color:#4A5568;border:2px dashed #1E2A40;border-radius:10px}
-        .ib{background:none;border:none;color:#4A5568;cursor:pointer;padding:6px;display:flex;align-items:center}.ib:hover{color:#EF4444}
+        .ib{background:none;border:none;color:#4A5568;cursor:pointer;padding:6px;display:flex;align-items:center;transition:color .15s}.ib:hover{color:#EF4444}
         @media(max-width:640px){.g2,.g3{grid-template-columns:1fr}}
       `}</style>
 
@@ -278,38 +435,36 @@ export default function App(){
               <button className="bp" onClick={addPay} disabled={!sel||!monto||!det} style={{width:"100%",justifyContent:"center"}}><Plus size={16}/>Agregar a Nómina</button>
             </div>
 
-            {pays.length===0?<div className="es"><ClipboardList size={32} style={{marginBottom:8,opacity:.4}}/><div style={{fontSize:14}}>No hay pagos</div><div style={{fontSize:12,marginTop:4}}>Busca un proveedor para comenzar</div></div>
-            :<>
-              {pays.map((p,i)=>{const s=sups.find(x=>cleanRut(x.rut)===cleanRut(p.rut));const sp=splitAmount(p.monto);return(
-                <div key={i} className="pr"><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
-                  <div style={{flex:1}}><div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-                    <span style={{fontWeight:600,fontSize:14}}>{s?.nombre||p.rut}</span>
-                    {sp.length>1&&<span className="bdg" style={{background:"#2D1F0E",color:"#F59E0B"}}>SPLIT {sp.length}x</span>}
-                  </div><div className="tm" style={{fontSize:12}}>{p.detalle}</div>
-                  {sp.length>1&&<div style={{color:"#4A5568",fontSize:11,marginTop:4}}>Dividido: {sp.map(formatCLP).join(" + ")}</div>}
-                  </div>
-                  <div style={{display:"flex",alignItems:"center",gap:12}}>
-                    <span className="tg" style={{fontWeight:700,fontSize:15,fontVariantNumeric:"tabular-nums"}}>{formatCLP(p.monto)}</span>
-                    <button className="ib" onClick={()=>rmPay(p.id)}><Trash2 size={15}/></button>
-                  </div>
-                </div></div>);})}
+            {pays.length===0
+              ? <div className="es"><ClipboardList size={32} style={{marginBottom:8,opacity:.4}}/><div style={{fontSize:14}}>No hay pagos</div><div style={{fontSize:12,marginTop:4}}>Busca un proveedor para comenzar</div></div>
+              : <>
+                  {pays.map((p, i) => (
+                    <PayRow
+                      key={p.id || i}
+                      p={p}
+                      sups={sups}
+                      onRemove={rmPay}
+                      onSave={savePay}
+                    />
+                  ))}
 
-              <div style={{background:"#0F1729",borderRadius:10,padding:16,border:"1px solid #253048",marginTop:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div className="tm" style={{fontSize:12}}>{pays.length} pagos · {totalR} registros TXT</div>
-                <div style={{textAlign:"right"}}><div className="tm" style={{fontSize:11}}>TOTAL NÓMINA</div>
-                  <div className="tg" style={{fontSize:22,fontWeight:800,fontVariantNumeric:"tabular-nums"}}>{formatCLP(totalP)}</div>
-                </div>
-              </div>
+                  <div style={{background:"#0F1729",borderRadius:10,padding:16,border:"1px solid #253048",marginTop:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div className="tm" style={{fontSize:12}}>{pays.length} pagos · {totalR} registros TXT</div>
+                    <div style={{textAlign:"right"}}><div className="tm" style={{fontSize:11}}>TOTAL NÓMINA</div>
+                      <div className="tg" style={{fontSize:22,fontWeight:800,fontVariantNumeric:"tabular-nums"}}>{formatCLP(totalP)}</div>
+                    </div>
+                  </div>
 
-              <div style={{display:"flex",gap:10,marginTop:16,flexWrap:"wrap"}}>
-                <button className="bp" onClick={dlTXT} style={{flex:1,justifyContent:"center"}}><Download size={16}/>Descargar TXT</button>
-                <button className="bs" onClick={cpEmail} style={{flex:1,justifyContent:"center"}}>{copied?<Check size={16} style={{color:"#4ADE80"}}/>:<Copy size={16}/>}{copied?"¡Copiado!":"Copiar Correo"}</button>
-                <button className="bs" onClick={()=>setShowTxt(!showTxt)}><Eye size={16}/>TXT</button>
-                <button className="bs" onClick={()=>setShowMail(!showMail)}><Mail size={16}/>Email</button>
-              </div>
-              {showTxt&&<div className="cd" style={{marginTop:14,marginBottom:0}}><div className="cdt">Vista previa TXT:</div><pre style={{color:"#8B9AAF",fontSize:11,whiteSpace:"pre-wrap",wordBreak:"break-all",lineHeight:1.6}}>{genTXT(pays,sups,cfg)}</pre></div>}
-              {showMail&&<div className="cd" style={{marginTop:14,marginBottom:0}}><div className="cdt">Correo:</div><div className="tm" style={{fontSize:12,marginBottom:2}}>Para: {cfg.para}</div><div className="tm" style={{fontSize:12,marginBottom:8}}>CC: {cfg.cc}</div><div style={{background:"#fff",borderRadius:6,padding:16}} dangerouslySetInnerHTML={{__html:genEmailHTML(pays,sups,cfg)}}/></div>}
-            </>}
+                  <div style={{display:"flex",gap:10,marginTop:16,flexWrap:"wrap"}}>
+                    <button className="bp" onClick={dlTXT} style={{flex:1,justifyContent:"center"}}><Download size={16}/>Descargar TXT</button>
+                    <button className="bs" onClick={cpEmail} style={{flex:1,justifyContent:"center"}}>{copied?<Check size={16} style={{color:"#4ADE80"}}/>:<Copy size={16}/>}{copied?"¡Copiado!":"Copiar Correo"}</button>
+                    <button className="bs" onClick={()=>setShowTxt(!showTxt)}><Eye size={16}/>TXT</button>
+                    <button className="bs" onClick={()=>setShowMail(!showMail)}><Mail size={16}/>Email</button>
+                  </div>
+                  {showTxt&&<div className="cd" style={{marginTop:14,marginBottom:0}}><div className="cdt">Vista previa TXT:</div><pre style={{color:"#8B9AAF",fontSize:11,whiteSpace:"pre-wrap",wordBreak:"break-all",lineHeight:1.6}}>{genTXT(pays,sups,cfg)}</pre></div>}
+                  {showMail&&<div className="cd" style={{marginTop:14,marginBottom:0}}><div className="cdt">Correo:</div><div className="tm" style={{fontSize:12,marginBottom:2}}>Para: {cfg.para}</div><div className="tm" style={{fontSize:12,marginBottom:8}}>CC: {cfg.cc}</div><div style={{background:"#fff",borderRadius:6,padding:16}} dangerouslySetInnerHTML={{__html:genEmailHTML(pays,sups,cfg)}}/></div>}
+                </>
+            }
           </div>}
 
           {tab==="proveedores"&&<div>
