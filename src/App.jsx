@@ -116,7 +116,6 @@ function PayRow({ p, sups, onRemove, onSave }) {
     setEditMonto(String(p.monto));
     setEditDet(p.detalle);
     setEditing(true);
-    // focus monto after render
     setTimeout(() => montoRef.current?.focus(), 50);
   };
 
@@ -135,6 +134,10 @@ function PayRow({ p, sups, onRemove, onSave }) {
     if (e.key === "Enter") confirmSave();
     if (e.key === "Escape") cancelEdit();
   };
+
+  // Reflect server-refreshed props while NOT editing
+  const displayMonto = editing ? editMonto : p.monto;
+  const displayDet   = editing ? editDet   : p.detalle;
 
   return (
     <div className="pr" style={{ borderColor: editing ? "#4A6FA5" : "#1E2A40", transition: "border-color .2s" }}>
@@ -203,7 +206,6 @@ function PayRow({ p, sups, onRemove, onSave }) {
             <span className="tg" style={{ fontWeight: 700, fontSize: 15, fontVariantNumeric: "tabular-nums" }}>
               {formatCLP(p.monto)}
             </span>
-            {/* Edit button */}
             <button
               className="ib"
               onClick={startEdit}
@@ -214,7 +216,6 @@ function PayRow({ p, sups, onRemove, onSave }) {
             >
               <Pencil size={14} />
             </button>
-            {/* Delete button */}
             <button className="ib" onClick={() => onRemove(p.id)} title="Eliminar">
               <Trash2 size={14} />
             </button>
@@ -271,9 +272,9 @@ export default function App(){
     if(m<=0)return;
     if(conn&&cfg.googleSheetsUrl){
       try{await api.addPay(cfg.googleSheetsUrl,{rut:sel.rut,detalle:det.toUpperCase(),monto:m});const p=await api.payments(cfg.googleSheetsUrl);setPays(p);}
-      catch{setPays(p=>[...p,{id:"local_"+Date.now(),rut:sel.rut,detalle:det.toUpperCase(),monto:m}]);}
+      catch{setPays(prev=>[...prev,{id:"local_"+Date.now(),rut:sel.rut,detalle:det.toUpperCase(),monto:m}]);}
     } else {
-      setPays(p=>[...p,{id:"local_"+Date.now(),rut:sel.rut,detalle:det.toUpperCase(),monto:m}]);
+      setPays(prev=>[...prev,{id:"local_"+Date.now(),rut:sel.rut,detalle:det.toUpperCase(),monto:m}]);
     }
     setSel(null);setMonto("");setDet("");
   };
@@ -281,25 +282,34 @@ export default function App(){
   const rmPay=async(id)=>{
     if(conn&&cfg.googleSheetsUrl){
       try{await api.rmPay(cfg.googleSheetsUrl,id);const p=await api.payments(cfg.googleSheetsUrl);setPays(p);}
-      catch{setPays(p=>p.filter(x=>x.id!==id));}
+      catch{setPays(prev=>prev.filter(x=>x.id!==id));}
     } else {
-      setPays(p=>p.filter(x=>x.id!==id));
+      setPays(prev=>prev.filter(x=>x.id!==id));
     }
   };
 
-  // ── Save edited payment ────────────────────────────────────────────────────
+  // ── FIX: actualización optimista — el estado local se actualiza PRIMERO,
+  //         sin esperar respuesta del servidor, evitando que api.payments()
+  //         sobreescriba el cambio si updatePayment no está implementado.
   const savePay = async (id, changes) => {
+    // 1. Actualizar estado local de inmediato (optimistic update)
+    setPays(prev => prev.map(x => x.id === id ? { ...x, ...changes } : x));
+
+    // 2. Intentar persistir en el servidor si hay conexión
     if (conn && cfg.googleSheetsUrl) {
       try {
-        await api.updatePay(cfg.googleSheetsUrl, { id, ...changes });
-        const p = await api.payments(cfg.googleSheetsUrl);
-        setPays(p);
+        const result = await api.updatePay(cfg.googleSheetsUrl, { id, ...changes });
+        // Solo recargar desde servidor si confirmó éxito explícitamente
+        if (result?.success) {
+          const serverPays = await api.payments(cfg.googleSheetsUrl);
+          setPays(serverPays);
+        }
+        // Si el servidor no retorna success (ej: updatePayment no implementado),
+        // el estado local optimista ya refleja el cambio correctamente.
       } catch {
-        // Fallback: update locally
-        setPays(p => p.map(x => x.id === id ? { ...x, ...changes } : x));
+        // Error de red: el cambio local ya fue aplicado, se mantiene.
+        console.warn("updatePay falló — cambio guardado solo localmente");
       }
-    } else {
-      setPays(p => p.map(x => x.id === id ? { ...x, ...changes } : x));
     }
   };
 
