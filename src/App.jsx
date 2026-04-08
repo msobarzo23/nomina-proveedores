@@ -135,14 +135,9 @@ function PayRow({ p, sups, onRemove, onSave }) {
     if (e.key === "Escape") cancelEdit();
   };
 
-  // Reflect server-refreshed props while NOT editing
-  const displayMonto = editing ? editMonto : p.monto;
-  const displayDet   = editing ? editDet   : p.detalle;
-
   return (
-    <div className="pr" style={{ borderColor: editing ? "#4A6FA5" : "#1E2A40", transition: "border-color .2s" }}>
+    <div className="pr" style={{ borderColor: editing ? "#4A6FA5" : p._localEdit ? "#1A5C2E" : "#1E2A40", transition: "border-color .2s" }}>
       {editing ? (
-        /* ── Edit mode ── */
         <div>
           <div style={{ fontSize: 12, fontWeight: 600, color: "#E8952F", marginBottom: 10 }}>
             {s?.nombre || p.rut}
@@ -188,12 +183,12 @@ function PayRow({ p, sups, onRemove, onSave }) {
           </div>
         </div>
       ) : (
-        /* ── View mode ── */
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
           <div style={{ flex: 1 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
               <span style={{ fontWeight: 600, fontSize: 14 }}>{s?.nombre || p.rut}</span>
               {sp.length > 1 && <span className="bdg" style={{ background: "#2D1F0E", color: "#F59E0B" }}>SPLIT {sp.length}x</span>}
+              {p._localEdit && <span className="bdg" style={{ background: "#0F2D1B", color: "#4ADE80" }}>editado</span>}
             </div>
             <div className="tm" style={{ fontSize: 12 }}>{p.detalle}</div>
             {sp.length > 1 && (
@@ -248,30 +243,55 @@ export default function App(){
   const fref=useRef(null);
   const[importing,setImporting]=useState(false);
 
+  // ── Ref que guarda overrides locales: { [id]: { monto, detalle } }
+  // Usa useRef para que persista entre re-renders SIN causar re-renders.
+  // Es la "memoria" que protege los cambios editados del polling automático.
+  const localEdits = useRef({});
+
   useEffect(()=>{saveSettings(cfg);},[cfg]);
+
+  // Aplica los overrides del ref sobre cualquier array de pagos que llegue del servidor
+  const applyLocalEdits = useCallback((serverPays) => {
+    const edits = localEdits.current;
+    if (Object.keys(edits).length === 0) return serverPays;
+    return serverPays.map(p =>
+      edits[p.id] ? { ...p, ...edits[p.id], _localEdit: true } : p
+    );
+  }, []);
 
   const refresh=useCallback(async()=>{
     if(!cfg.googleSheetsUrl){setConn(false);return;}
     setSyncing(true);setSyncErr("");
     try{
       const d=await api.list(cfg.googleSheetsUrl);setSups(d);saveCache(d);
-      const p=await api.payments(cfg.googleSheetsUrl);setPays(p);
+      const p=await api.payments(cfg.googleSheetsUrl);
+      setPays(applyLocalEdits(p));
       setConn(true);
     }
     catch(e){setSyncErr(e.message);setConn(false);const c=loadCache();if(c.length>0&&sups.length===0)setSups(c);}
     finally{setSyncing(false);}
-  },[cfg.googleSheetsUrl]);
+  },[cfg.googleSheetsUrl, applyLocalEdits]);
 
   useEffect(()=>{if(cfg.googleSheetsUrl)refresh();},[cfg.googleSheetsUrl]);
 
-  useEffect(()=>{if(!conn||!cfg.googleSheetsUrl)return;const iv=setInterval(async()=>{try{const p=await api.payments(cfg.googleSheetsUrl);setPays(p);}catch{}},30000);return()=>clearInterval(iv);},[conn,cfg.googleSheetsUrl]);
+  // Polling cada 30s — ahora pasa por applyLocalEdits antes de actualizar el estado
+  useEffect(()=>{
+    if(!conn||!cfg.googleSheetsUrl)return;
+    const iv=setInterval(async()=>{
+      try{
+        const p=await api.payments(cfg.googleSheetsUrl);
+        setPays(applyLocalEdits(p)); // ← los edits locales se reaplican en cada poll
+      }catch{}
+    },30000);
+    return()=>clearInterval(iv);
+  },[conn, cfg.googleSheetsUrl, applyLocalEdits]);
 
   const addPay=async()=>{
     if(!sel||!monto||!det)return;
     const m=Number(String(monto).replace(/\D/g,""));
     if(m<=0)return;
     if(conn&&cfg.googleSheetsUrl){
-      try{await api.addPay(cfg.googleSheetsUrl,{rut:sel.rut,detalle:det.toUpperCase(),monto:m});const p=await api.payments(cfg.googleSheetsUrl);setPays(p);}
+      try{await api.addPay(cfg.googleSheetsUrl,{rut:sel.rut,detalle:det.toUpperCase(),monto:m});const p=await api.payments(cfg.googleSheetsUrl);setPays(applyLocalEdits(p));}
       catch{setPays(prev=>[...prev,{id:"local_"+Date.now(),rut:sel.rut,detalle:det.toUpperCase(),monto:m}]);}
     } else {
       setPays(prev=>[...prev,{id:"local_"+Date.now(),rut:sel.rut,detalle:det.toUpperCase(),monto:m}]);
@@ -280,40 +300,56 @@ export default function App(){
   };
 
   const rmPay=async(id)=>{
+    // Eliminar también el override local si existía
+    delete localEdits.current[id];
     if(conn&&cfg.googleSheetsUrl){
-      try{await api.rmPay(cfg.googleSheetsUrl,id);const p=await api.payments(cfg.googleSheetsUrl);setPays(p);}
+      try{await api.rmPay(cfg.googleSheetsUrl,id);const p=await api.payments(cfg.googleSheetsUrl);setPays(applyLocalEdits(p));}
       catch{setPays(prev=>prev.filter(x=>x.id!==id));}
     } else {
       setPays(prev=>prev.filter(x=>x.id!==id));
     }
   };
 
-  // ── FIX: actualización optimista — el estado local se actualiza PRIMERO,
-  //         sin esperar respuesta del servidor, evitando que api.payments()
-  //         sobreescriba el cambio si updatePayment no está implementado.
+  // ── FIX DEFINITIVO ────────────────────────────────────────────────────────
+  // 1. Guarda el cambio en localEdits.current (persiste entre polls)
+  // 2. Actualiza el estado local de inmediato (la UI refleja el cambio al instante)
+  // 3. Intenta persistir en el servidor; solo libera el override si confirma éxito
   const savePay = async (id, changes) => {
-    // 1. Actualizar estado local de inmediato (optimistic update)
-    setPays(prev => prev.map(x => x.id === id ? { ...x, ...changes } : x));
+    // Paso 1: registrar override (protege contra el polling)
+    localEdits.current[id] = changes;
 
-    // 2. Intentar persistir en el servidor si hay conexión
+    // Paso 2: actualizar UI de inmediato
+    setPays(prev => prev.map(x =>
+      x.id === id ? { ...x, ...changes, _localEdit: true } : x
+    ));
+
+    // Paso 3: intentar persistir en servidor
     if (conn && cfg.googleSheetsUrl) {
       try {
         const result = await api.updatePay(cfg.googleSheetsUrl, { id, ...changes });
-        // Solo recargar desde servidor si confirmó éxito explícitamente
         if (result?.success) {
+          // El servidor confirmó: ya no necesitamos el override local
+          delete localEdits.current[id];
           const serverPays = await api.payments(cfg.googleSheetsUrl);
-          setPays(serverPays);
+          setPays(applyLocalEdits(serverPays));
         }
-        // Si el servidor no retorna success (ej: updatePayment no implementado),
-        // el estado local optimista ya refleja el cambio correctamente.
+        // Si no retorna success (updatePayment no implementado en el Apps Script),
+        // el override en localEdits.current sigue activo y protege el valor en
+        // cada polling subsecuente indefinidamente.
       } catch {
-        // Error de red: el cambio local ya fue aplicado, se mantiene.
-        console.warn("updatePay falló — cambio guardado solo localmente");
+        // Error de red: el override local sigue activo, cambio protegido.
+        console.warn("updatePay falló — cambio protegido en override local");
       }
     }
   };
 
-  const clearAllPays=async()=>{if(!confirm("¿Limpiar toda la nómina?"))return;if(conn&&cfg.googleSheetsUrl){try{await api.clearPays(cfg.googleSheetsUrl);setPays([]);}catch{setPays([]);}}else{setPays([]);}};
+  const clearAllPays=async()=>{
+    if(!confirm("¿Limpiar toda la nómina?"))return;
+    localEdits.current = {}; // limpiar todos los overrides
+    if(conn&&cfg.googleSheetsUrl){try{await api.clearPays(cfg.googleSheetsUrl);setPays([]);}catch{setPays([]);}}
+    else{setPays([]);}
+  };
+
   const totalP=useMemo(()=>pays.reduce((s,p)=>s+p.monto,0),[pays]);
   const totalR=useMemo(()=>pays.reduce((s,p)=>s+splitAmount(p.monto).length,0),[pays]);
 
