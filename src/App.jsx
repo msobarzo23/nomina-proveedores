@@ -101,7 +101,6 @@ function SupSearch({suppliers,onSelect,placeholder}){
   </div>);
 }
 
-// ─── Inline edit row ──────────────────────────────────────────────────────────
 function PayRow({ p, sups, onRemove, onSave }) {
   const [editing, setEditing] = useState(false);
   const [editMonto, setEditMonto] = useState("");
@@ -136,7 +135,11 @@ function PayRow({ p, sups, onRemove, onSave }) {
   };
 
   return (
-    <div className="pr" style={{ borderColor: editing ? "#4A6FA5" : p._localEdit ? "#1A5C2E" : "#1E2A40", transition: "border-color .2s" }}>
+    <div className="pr" style={{ 
+      borderColor: editing ? "#4A6FA5" : p._localEdit ? "#1A5C2E" : "#1E2A40", 
+      opacity: p._isPending ? 0.6 : 1,
+      transition: "all .2s" 
+    }}>
       {editing ? (
         <div>
           <div style={{ fontSize: 12, fontWeight: 600, color: "#E8952F", marginBottom: 10 }}>
@@ -155,11 +158,6 @@ function PayRow({ p, sups, onRemove, onSave }) {
                 style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}
                 onKeyDown={handleKey}
               />
-              {editMonto && Number(editMonto) > MAX_TRANSFER && (
-                <div style={{ color: "#F59E0B", fontSize: 11, marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
-                  <AlertCircle size={11} />Split en {splitAmount(Number(editMonto)).length} transf.
-                </div>
-              )}
             </div>
             <div>
               <label className="lbl">Detalle / Glosa</label>
@@ -189,6 +187,7 @@ function PayRow({ p, sups, onRemove, onSave }) {
               <span style={{ fontWeight: 600, fontSize: 14 }}>{s?.nombre || p.rut}</span>
               {sp.length > 1 && <span className="bdg" style={{ background: "#2D1F0E", color: "#F59E0B" }}>SPLIT {sp.length}x</span>}
               {p._localEdit && <span className="bdg" style={{ background: "#0F2D1B", color: "#4ADE80" }}>editado</span>}
+              {p._isPending && <Loader2 size={12} className="spn" style={{color: "#4A6FA5"}}/>}
             </div>
             <div className="tm" style={{ fontSize: 12 }}>{p.detalle}</div>
             {sp.length > 1 && (
@@ -201,17 +200,10 @@ function PayRow({ p, sups, onRemove, onSave }) {
             <span className="tg" style={{ fontWeight: 700, fontSize: 15, fontVariantNumeric: "tabular-nums" }}>
               {formatCLP(p.monto)}
             </span>
-            <button
-              className="ib"
-              onClick={startEdit}
-              title="Editar"
-              style={{ color: "#4A6FA5" }}
-              onMouseEnter={e => e.currentTarget.style.color = "#7AABF0"}
-              onMouseLeave={e => e.currentTarget.style.color = "#4A6FA5"}
-            >
+            <button className="ib" onClick={startEdit} title="Editar" style={{ color: "#4A6FA5" }} disabled={p._isPending}>
               <Pencil size={14} />
             </button>
-            <button className="ib" onClick={() => onRemove(p.id)} title="Eliminar">
+            <button className="ib" onClick={() => onRemove(p.id)} title="Eliminar" disabled={p._isPending}>
               <Trash2 size={14} />
             </button>
           </div>
@@ -243,14 +235,10 @@ export default function App(){
   const fref=useRef(null);
   const[importing,setImporting]=useState(false);
 
-  // ── Ref que guarda overrides locales: { [id]: { monto, detalle } }
-  // Usa useRef para que persista entre re-renders SIN causar re-renders.
-  // Es la "memoria" que protege los cambios editados del polling automático.
   const localEdits = useRef({});
 
   useEffect(()=>{saveSettings(cfg);},[cfg]);
 
-  // Aplica los overrides del ref sobre cualquier array de pagos que llegue del servidor
   const applyLocalEdits = useCallback((serverPays) => {
     const edits = localEdits.current;
     if (Object.keys(edits).length === 0) return serverPays;
@@ -274,70 +262,86 @@ export default function App(){
 
   useEffect(()=>{if(cfg.googleSheetsUrl)refresh();},[cfg.googleSheetsUrl]);
 
-  // Polling cada 30s — ahora pasa por applyLocalEdits antes de actualizar el estado
   useEffect(()=>{
     if(!conn||!cfg.googleSheetsUrl)return;
     const iv=setInterval(async()=>{
       try{
         const p=await api.payments(cfg.googleSheetsUrl);
-        setPays(applyLocalEdits(p)); // ← los edits locales se reaplican en cada poll
+        setPays(prev => {
+          // Si hay algún pago marcado como _isPending, no sobreescribir con la data vieja del servidor
+          const hasPending = prev.some(x => x._isPending);
+          if (hasPending) return prev;
+          return applyLocalEdits(p);
+        });
       }catch{}
     },30000);
     return()=>clearInterval(iv);
   },[conn, cfg.googleSheetsUrl, applyLocalEdits]);
 
+  // --- CORRECCIÓN: AGREGAR PAGO OPTIMISTA ---
   const addPay=async()=>{
     if(!sel||!monto||!det)return;
     const m=Number(String(monto).replace(/\D/g,""));
     if(m<=0)return;
-    if(conn&&cfg.googleSheetsUrl){
-      try{await api.addPay(cfg.googleSheetsUrl,{rut:sel.rut,detalle:det.toUpperCase(),monto:m});const p=await api.payments(cfg.googleSheetsUrl);setPays(applyLocalEdits(p));}
-      catch{setPays(prev=>[...prev,{id:"local_"+Date.now(),rut:sel.rut,detalle:det.toUpperCase(),monto:m}]);}
-    } else {
-      setPays(prev=>[...prev,{id:"local_"+Date.now(),rut:sel.rut,detalle:det.toUpperCase(),monto:m}]);
-    }
+
+    const tempId = "local_" + Date.now();
+    const newPay = { id: tempId, rut: sel.rut, detalle: det.toUpperCase(), monto: m, _isPending: true };
+    
+    // 1. Actualizar UI de inmediato
+    setPays(prev => [...prev, newPay]);
+    
+    // 2. Limpiar inputs de inmediato
+    const savedSel = sel;
+    const savedDet = det;
     setSel(null);setMonto("");setDet("");
-  };
 
-  const rmPay=async(id)=>{
-    // Eliminar también el override local si existía
-    delete localEdits.current[id];
     if(conn&&cfg.googleSheetsUrl){
-      try{await api.rmPay(cfg.googleSheetsUrl,id);const p=await api.payments(cfg.googleSheetsUrl);setPays(applyLocalEdits(p));}
-      catch{setPays(prev=>prev.filter(x=>x.id!==id));}
-    } else {
-      setPays(prev=>prev.filter(x=>x.id!==id));
+      try{
+        await api.addPay(cfg.googleSheetsUrl,{rut: savedSel.rut, detalle: savedDet.toUpperCase(), monto: m});
+        const p=await api.payments(cfg.googleSheetsUrl);
+        setPays(applyLocalEdits(p));
+      }
+      catch{
+        // En caso de error real, quitamos el pendiente
+        setPays(prev => prev.filter(x => x.id !== tempId));
+        alert("Error al conectar con Google Sheets");
+      }
     }
   };
 
-  // ── FIX DEFINITIVO ────────────────────────────────────────────────────────
-  // 1. Guarda el cambio en localEdits.current (persiste entre polls)
-  // 2. Actualiza el estado local de inmediato (la UI refleja el cambio al instante)
-  // 3. Intenta persistir en el servidor; solo libera el override si confirma éxito
-  const savePay = async (id, changes) => {
-    // Paso 1: registrar override (protege contra el polling)
-    localEdits.current[id] = changes;
+  // --- CORRECCIÓN: ELIMINAR PAGO OPTIMISTA ---
+  const rmPay=async(id)=>{
+    const originalPays = [...pays];
+    // 1. Quitar de la UI de inmediato
+    setPays(prev => prev.filter(x => x.id !== id));
+    delete localEdits.current[id];
 
-    // Paso 2: actualizar UI de inmediato
+    if(conn&&cfg.googleSheetsUrl){
+      try{
+        await api.rmPay(cfg.googleSheetsUrl,id);
+      }
+      catch{
+        setPays(originalPays);
+        alert("No se pudo eliminar del servidor");
+      }
+    }
+  };
+
+  const savePay = async (id, changes) => {
+    localEdits.current[id] = changes;
     setPays(prev => prev.map(x =>
       x.id === id ? { ...x, ...changes, _localEdit: true } : x
     ));
 
-    // Paso 3: intentar persistir en servidor
     if (conn && cfg.googleSheetsUrl) {
       try {
         const result = await api.updatePay(cfg.googleSheetsUrl, { id, ...changes });
         if (result?.success) {
-          // El servidor confirmó: ya no necesitamos el override local
           delete localEdits.current[id];
           const serverPays = await api.payments(cfg.googleSheetsUrl);
           setPays(applyLocalEdits(serverPays));
         }
-        // Si no retorna success (updatePayment no implementado en el Apps Script),
-        // el override en localEdits.current sigue activo y protege el valor en
-        // cada polling subsecuente indefinidamente.
       } catch {
-        // Error de red: el override local sigue activo, cambio protegido.
         console.warn("updatePay falló — cambio protegido en override local");
       }
     }
@@ -345,9 +349,13 @@ export default function App(){
 
   const clearAllPays=async()=>{
     if(!confirm("¿Limpiar toda la nómina?"))return;
-    localEdits.current = {}; // limpiar todos los overrides
-    if(conn&&cfg.googleSheetsUrl){try{await api.clearPays(cfg.googleSheetsUrl);setPays([]);}catch{setPays([]);}}
-    else{setPays([]);}
+    const prevPays = [...pays];
+    setPays([]);
+    localEdits.current = {}; 
+    if(conn&&cfg.googleSheetsUrl){
+      try{await api.clearPays(cfg.googleSheetsUrl);}
+      catch{setPays(prevPays); alert("Error al limpiar servidor");}
+    }
   };
 
   const totalP=useMemo(()=>pays.reduce((s,p)=>s+p.monto,0),[pays]);
@@ -472,7 +480,6 @@ export default function App(){
                 <div><label className="lbl">Monto ($)</label>
                   <input type="text" value={monto} onChange={e=>setMonto(e.target.value.replace(/\D/g,""))} placeholder="0" className="inp" style={{fontVariantNumeric:"tabular-nums",fontWeight:600}}
                     onBlur={()=>{if(monto)setMonto(Number(monto).toLocaleString("es-CL"));}} onFocus={()=>setMonto(String(monto).replace(/\D/g,""))}/>
-                  {monto&&Number(String(monto).replace(/\D/g,""))>MAX_TRANSFER&&<div style={{color:"#F59E0B",fontSize:11,marginTop:4,display:"flex",alignItems:"center",gap:4}}><AlertCircle size={12}/>Split en {splitAmount(Number(String(monto).replace(/\D/g,""))).length} transf.</div>}
                 </div>
                 <div><label className="lbl">Detalle / Glosa</label>
                   <input type="text" value={det} onChange={e=>setDet(e.target.value)} placeholder="Ej: TRABAJOS POZO ALMONTE F/2186" className="inp" onKeyDown={e=>{if(e.key==="Enter")addPay();}}/>
@@ -528,7 +535,7 @@ export default function App(){
             {syncErr&&<div className="me" style={{marginBottom:14}}><XCircle size={16} style={{flexShrink:0,marginTop:1}}/><div>Error: {syncErr}. Usando caché ({sups.length}).</div></div>}
 
             {showAdd&&<div className="cd">
-              <div className="cdt">Agregar Nuevo Proveedor{conn&&<span style={{fontWeight:400,color:"#4ADE80",fontSize:11,marginLeft:8}}>→ Google Sheets</span>}</div>
+              <div className="cdt">Agregar Nuevo Proveedor</div>
               {msg.t==="e"&&<div className="me"><AlertCircle size={16} style={{flexShrink:0,marginTop:1}}/>{msg.x}</div>}
               {msg.t==="s"&&<div className="ms">{msg.x}</div>}
               <div className="g2">
@@ -555,7 +562,6 @@ export default function App(){
                   <div className="tm" style={{fontSize:11,marginTop:2}}>{formatRut(s.rut)} · {BANK_MAP[s.codigoBanco]?.name||`Cod ${s.codigoBanco}`} · {s.tipoCuenta} · Cta: {s.numeroCuenta}{s.email&&` · ${s.email}`}</div>
                 </div><button className="ib" onClick={()=>delSup(s.rut)}><Trash2 size={14}/></button>
               </div>)}
-              {!supQ&&sups.length>50&&<div style={{textAlign:"center",padding:12,color:"#4A5568",fontSize:12}}>Mostrando 50 de {sups.length} · Usa el buscador</div>}
             </div>
           </div>}
 
@@ -563,13 +569,11 @@ export default function App(){
             <h2 style={{fontSize:16,fontWeight:700,marginBottom:20,display:"flex",alignItems:"center",gap:8}}><Settings size={18} color="#E8952F"/>Configuración</h2>
 
             <div className="cd" style={{borderColor:conn?"#1A5C2E":"#2D3A50"}}>
-              <div className="cdt" style={{display:"flex",alignItems:"center",gap:8}}>{conn?<Cloud size={16} style={{color:"#4ADE80"}}/>:<CloudOff size={16}/>}Conexión Google Sheets{conn&&<span style={{color:"#4ADE80",fontWeight:400,fontSize:11}}>· Conectado</span>}</div>
+              <div className="cdt" style={{display:"flex",alignItems:"center",gap:8}}>{conn?<Cloud size={16} style={{color:"#4ADE80"}}/>:<CloudOff size={16}/>}Conexión Google Sheets</div>
               <div style={{marginBottom:14}}><label className="lbl">URL del Apps Script (Web App)</label>
                 <input type="text" value={cfg.googleSheetsUrl||""} onChange={e=>setCfg({...cfg,googleSheetsUrl:e.target.value.trim()})} placeholder="https://script.google.com/macros/s/xxxxx/exec" className="inp"/>
-                <div className="tm" style={{fontSize:11,marginTop:4,lineHeight:1.5}}>Pega la URL del Apps Script de tu Google Sheet. Sin URL, funciona en modo local.</div>
               </div>
               {cfg.googleSheetsUrl&&<button className="bs" onClick={refresh} disabled={syncing} style={{fontSize:12}}>{syncing?<Loader2 size={14} className="spn"/>:<RefreshCw size={14}/>}Probar conexión</button>}
-              {syncErr&&<div className="me" style={{marginTop:10}}><XCircle size={14}/>{syncErr}</div>}
             </div>
 
             <div className="cd">
@@ -579,15 +583,10 @@ export default function App(){
                 <div><label className="lbl">N° Cuenta Cargo</label><input value={cfg.ctaCargo} onChange={e=>setCfg({...cfg,ctaCargo:e.target.value})} className="inp"/></div>
               </div>
               <div className="g2">
-                <div><label className="lbl">Tipo de Servicio</label><input value={cfg.tipoServicio} readOnly className="inp" style={{opacity:.6}}/><div className="tm" style={{fontSize:11,marginTop:2}}>005003 – Pago de Proveedores</div></div>
+                <div><label className="lbl">Tipo de Servicio</label><input value={cfg.tipoServicio} readOnly className="inp" style={{opacity:.6}}/></div>
                 <div><label className="lbl">Descripción Cabecera</label><input value={cfg.descripcion} onChange={e=>setCfg({...cfg,descripcion:e.target.value})} className="inp"/></div>
               </div>
-              <div className="g3">
-                <div><label className="lbl">Medio Respaldo</label><input value={cfg.medioRespaldo} readOnly className="inp" style={{opacity:.6,fontSize:11}}/></div>
-                <div><label className="lbl">Glosa Cta Origen</label><input value={cfg.glosaCuentaCargo} onChange={e=>setCfg({...cfg,glosaCuentaCargo:e.target.value})} className="inp"/></div>
-                <div><label className="lbl">Glosa Cta Destino</label><input value={cfg.glosaCuentaAbono} onChange={e=>setCfg({...cfg,glosaCuentaAbono:e.target.value})} className="inp"/></div>
-              </div>
-              <div><label className="lbl">Email Notificación</label><input value={cfg.emailNotificacion} onChange={e=>setCfg({...cfg,emailNotificacion:e.target.value})} className="inp" style={{maxWidth:350}}/><div className="tm" style={{fontSize:11,marginTop:2}}>Va en cada registro TXT para recibir comprobantes</div></div>
+              <div><label className="lbl">Email Notificación</label><input value={cfg.emailNotificacion} onChange={e=>setCfg({...cfg,emailNotificacion:e.target.value})} className="inp" style={{maxWidth:350}}/></div>
             </div>
 
             <div className="cd">
