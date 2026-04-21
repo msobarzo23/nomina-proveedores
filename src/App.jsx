@@ -3,7 +3,7 @@ import {
   Search, Plus, Download, Mail, Copy, Check, Trash2, Settings, Users,
   FileText, AlertCircle, X, Upload, RefreshCw,
   Building2, UserPlus, ClipboardList, Eye, Cloud, CloudOff,
-  Loader2, XCircle, Pencil, Save
+  Loader2, XCircle, Pencil, Save, EyeOff
 } from "lucide-react";
 
 const COMPANY_DEFAULTS = {
@@ -56,7 +56,8 @@ const api = {
   async clearPays(url){ const r=await fetch(url,{method:"POST",body:JSON.stringify({action:"clearPayments"}),redirect:"follow"}); return await r.json(); },
 };
 
-const genTXT = (pays,sups,cfg) => {
+const genTXT = (pays, sups, cfg, descOverride) => {
+  const desc = (descOverride || cfg.descripcion).trim();
   const recs=[];
   pays.forEach(p=>{const s=sups.find(x=>cleanRut(x.rut)===cleanRut(p.rut));if(!s)return;
     splitAmount(p.monto).forEach(amt=>recs.push({
@@ -66,22 +67,105 @@ const genTXT = (pays,sups,cfg) => {
     }));
   });
   const sum=recs.reduce((s,r)=>s+r.monto,0);
-  const hdr=[cfg.rutEmpresa,recs.length,sum,cfg.tipoServicio,cfg.medioRespaldo,cfg.ctaCargo,cfg.descripcion,cfg.glosaCuentaCargo,cfg.glosaCuentaAbono].join(",");
+  const hdr=[cfg.rutEmpresa,recs.length,sum,cfg.tipoServicio,cfg.medioRespaldo,cfg.ctaCargo,desc,cfg.glosaCuentaCargo,cfg.glosaCuentaAbono].join(",");
   const lines=recs.map(r=>[r.rut,r.nombre,r.email,r.met,r.banco,r.tipo,r.cta,"","","",r.monto,cfg.tipoCuentaCargo,cfg.ctaCargo,r.suc,"",r.glosa,cfg.glosaCuentaCargo,cfg.glosaCuentaAbono].join(","));
   return[hdr,...lines].join("\n");
 };
 
-const genEmail = (pays,sups,cfg) => {
+const genEmail = (pays, sups, cfg, descOverride) => {
+  const desc = (descOverride || cfg.descripcion).trim();
   const total=pays.reduce((s,p)=>s+p.monto,0);
-  let t=`${cfg.saludo}\n\nAdjunto detalle de nómina para su autorización:\n\nNÓMINA PAGOS ${todayStr()}\n\n`;
+  let t=`${cfg.saludo}\n\nAdjunto detalle de nómina para su autorización:\n\nNÓMINA PAGOS ${todayStr()} — ${desc}\n\n`;
   pays.forEach(p=>{const s=sups.find(x=>cleanRut(x.rut)===cleanRut(p.rut));t+=`• ${s?.nombre||p.rut}\n  ${p.detalle}\n  Monto: ${formatCLP(p.monto)}\n\n`;});
   return t+`─────────────────────────────\nTOTAL: ${formatCLP(total)}\n\n${cfg.firma}`;
 };
 
-const genEmailHTML = (pays,sups,cfg) => {
-  const total=pays.reduce((s,p)=>s+p.monto,0);
-  const rows=pays.map(p=>{const s=sups.find(x=>cleanRut(x.rut)===cleanRut(p.rut));return`<tr><td style="padding:6px 10px;border:1px solid #bbb;font-size:13px">${s?.nombre||p.rut}</td><td style="padding:6px 10px;border:1px solid #bbb;font-size:13px">${p.detalle}</td><td style="padding:6px 10px;border:1px solid #bbb;text-align:right;font-size:13px">$ ${Number(p.monto).toLocaleString("es-CL")}</td></tr>`;}).join("");
-  return`<div style="font-family:Arial,sans-serif"><p>${cfg.saludo}</p><p>Adjunto detalle de nómina para su autorización:</p><table style="border-collapse:collapse;width:100%;margin:12px 0"><tr style="background:#1a1a1a;color:#fff"><td style="padding:8px 10px;font-weight:bold;font-size:14px" colspan="2">NOMINA PAGOS</td><td style="padding:8px 10px;text-align:right;font-size:14px;color:#fff">${todayStr()}</td></tr><tr style="background:#333;color:#fff"><td style="padding:6px 10px;font-weight:bold;font-size:13px">Proveedor</td><td style="padding:6px 10px;font-weight:bold;font-size:13px">DETALLE</td><td style="padding:6px 10px;font-weight:bold;text-align:right;font-size:13px">Monto</td></tr>${rows}<tr style="background:#1a1a1a;color:#fff"><td style="padding:8px 10px;font-size:14px" colspan="2"><strong>Total</strong></td><td style="padding:8px 10px;text-align:right;font-weight:bold;font-size:14px">$ ${Number(total).toLocaleString("es-CL")}</td></tr></table><p>${cfg.firma.replace(/\n/g,"<br>")}</p></div>`;
+// ─── EMAIL HTML — diseño light mode compatible con Gmail/Outlook ──────────────
+const genEmailHTML = (pays, sups, cfg, descOverride) => {
+  const desc = (descOverride || cfg.descripcion).trim();
+  const total = pays.reduce((s,p)=>s+p.monto, 0);
+
+  const rows = pays.map((p, idx) => {
+    const s = sups.find(x => cleanRut(x.rut) === cleanRut(p.rut));
+    const bg = idx % 2 === 0 ? "#ffffff" : "#f9f9f9";
+    return `<tr>
+      <td style="padding:10px 16px;border-bottom:1px solid #ececec;font-size:13px;color:#1a1a1a;background:${bg};font-weight:600">${s?.nombre||p.rut}</td>
+      <td style="padding:10px 16px;border-bottom:1px solid #ececec;font-size:13px;color:#444444;background:${bg}">${p.detalle}</td>
+      <td style="padding:10px 16px;border-bottom:1px solid #ececec;font-size:13px;color:#1a1a1a;text-align:right;font-family:monospace;background:${bg};white-space:nowrap">$ ${Number(p.monto).toLocaleString("es-CL")}</td>
+    </tr>`;
+  }).join("");
+
+  const saludoHtml = cfg.saludo
+    ? `<p style="font-size:14px;color:#333;margin:0 0 12px">${cfg.saludo},</p><p style="font-size:14px;color:#333;margin:0 0 20px">Adjunto el detalle de la nómina de pagos para su autorización:</p>`
+    : `<p style="font-size:14px;color:#333;margin:0 0 20px">Adjunto el detalle de la nómina de pagos para su autorización:</p>`;
+
+  const firmaHtml = cfg.firma
+    ? `<p style="font-size:13px;color:#666;margin:20px 0 0;line-height:1.6">${cfg.firma.replace(/\n/g,"<br>")}</p>`
+    : "";
+
+  return `<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f4f4f4;font-family:Arial,Helvetica,sans-serif">
+<div style="max-width:620px;margin:24px auto;background:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;box-shadow:0 2px 8px rgba(0,0,0,.08)">
+
+  <!-- Cabecera -->
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#0E1525">
+    <tr>
+      <td style="padding:18px 24px">
+        <span style="color:#E8952F;font-weight:900;font-size:15px;letter-spacing:.5px">TRANSPORTES BELLO</span>
+        <span style="color:#8B9AAF;font-size:12px;margin-left:6px">e Hijos Ltda.</span>
+      </td>
+      <td style="padding:18px 24px;text-align:right">
+        <span style="color:#8B9AAF;font-size:12px">${todayStr()}</span>
+      </td>
+    </tr>
+  </table>
+
+  <!-- Banda descripción -->
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#E8952F">
+    <tr>
+      <td style="padding:8px 24px">
+        <span style="color:#0E1525;font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.8px">📋 NÓMINA PAGOS &nbsp;·&nbsp; ${desc}</span>
+      </td>
+    </tr>
+  </table>
+
+  <!-- Cuerpo del correo -->
+  <div style="padding:24px">
+    ${saludoHtml}
+
+    <!-- Tabla de pagos -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e0e0e0;border-radius:6px;overflow:hidden">
+      <thead>
+        <tr style="background:#f0f0f0">
+          <th style="padding:10px 16px;text-align:left;font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #ddd">Proveedor</th>
+          <th style="padding:10px 16px;text-align:left;font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #ddd">Detalle / Glosa</th>
+          <th style="padding:10px 16px;text-align:right;font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #ddd">Monto</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+      <tfoot>
+        <tr style="background:#0E1525">
+          <td colspan="2" style="padding:12px 16px;color:#8B9AAF;font-size:13px;font-weight:600">${pays.length} pago${pays.length!==1?"s":""}</td>
+          <td style="padding:12px 16px;text-align:right;color:#4ADE80;font-size:16px;font-weight:900;font-family:monospace;white-space:nowrap">$ ${Number(total).toLocaleString("es-CL")}</td>
+        </tr>
+      </tfoot>
+    </table>
+
+    ${firmaHtml}
+  </div>
+
+  <!-- Footer -->
+  <div style="background:#f9f9f9;border-top:1px solid #e0e0e0;padding:12px 24px;text-align:center">
+    <span style="font-size:11px;color:#aaa">Generado automáticamente · Nómina Proveedores Itaú</span>
+  </div>
+
+</div>
+</body>
+</html>`;
 };
 
 const parseCSV = (text) => {
@@ -235,6 +319,23 @@ export default function App(){
   const fref=useRef(null);
   const[importing,setImporting]=useState(false);
 
+  // ── NUEVOS ESTADOS ───────────────────────────────────────────────────────────
+  // Descripción editable en Nómina (sesión, no persiste en config)
+  const[nomDesc,setNomDesc]=useState(()=>loadSettings().descripcion||"PAGO PROVEEDORES");
+  const[editingDesc,setEditingDesc]=useState(false);
+  const[descDraft,setDescDraft]=useState("");
+
+  // Toast de copia
+  const[toast,setToast]=useState(null);
+  const toastTimerRef=useRef(null);
+
+  const showToast=(msg)=>{
+    if(toastTimerRef.current)clearTimeout(toastTimerRef.current);
+    setToast(msg);
+    toastTimerRef.current=setTimeout(()=>setToast(null),3000);
+  };
+  // ────────────────────────────────────────────────────────────────────────────
+
   const localEdits = useRef({});
 
   useEffect(()=>{saveSettings(cfg);},[cfg]);
@@ -268,7 +369,6 @@ export default function App(){
       try{
         const p=await api.payments(cfg.googleSheetsUrl);
         setPays(prev => {
-          // Si hay algún pago marcado como _isPending, no sobreescribir con la data vieja del servidor
           const hasPending = prev.some(x => x._isPending);
           if (hasPending) return prev;
           return applyLocalEdits(p);
@@ -278,23 +378,16 @@ export default function App(){
     return()=>clearInterval(iv);
   },[conn, cfg.googleSheetsUrl, applyLocalEdits]);
 
-  // --- CORRECCIÓN: AGREGAR PAGO OPTIMISTA ---
   const addPay=async()=>{
     if(!sel||!monto||!det)return;
     const m=Number(String(monto).replace(/\D/g,""));
     if(m<=0)return;
-
     const tempId = "local_" + Date.now();
     const newPay = { id: tempId, rut: sel.rut, detalle: det.toUpperCase(), monto: m, _isPending: true };
-    
-    // 1. Actualizar UI de inmediato
     setPays(prev => [...prev, newPay]);
-    
-    // 2. Limpiar inputs de inmediato
     const savedSel = sel;
     const savedDet = det;
     setSel(null);setMonto("");setDet("");
-
     if(conn&&cfg.googleSheetsUrl){
       try{
         await api.addPay(cfg.googleSheetsUrl,{rut: savedSel.rut, detalle: savedDet.toUpperCase(), monto: m});
@@ -302,20 +395,16 @@ export default function App(){
         setPays(applyLocalEdits(p));
       }
       catch{
-        // En caso de error real, quitamos el pendiente
         setPays(prev => prev.filter(x => x.id !== tempId));
         alert("Error al conectar con Google Sheets");
       }
     }
   };
 
-  // --- CORRECCIÓN: ELIMINAR PAGO OPTIMISTA ---
   const rmPay=async(id)=>{
     const originalPays = [...pays];
-    // 1. Quitar de la UI de inmediato
     setPays(prev => prev.filter(x => x.id !== id));
     delete localEdits.current[id];
-
     if(conn&&cfg.googleSheetsUrl){
       try{
         await api.rmPay(cfg.googleSheetsUrl,id);
@@ -332,7 +421,6 @@ export default function App(){
     setPays(prev => prev.map(x =>
       x.id === id ? { ...x, ...changes, _localEdit: true } : x
     ));
-
     if (conn && cfg.googleSheetsUrl) {
       try {
         const result = await api.updatePay(cfg.googleSheetsUrl, { id, ...changes });
@@ -358,11 +446,48 @@ export default function App(){
     }
   };
 
+  // ── STATS para el panel de totales ─────────────────────────────────────────
   const totalP=useMemo(()=>pays.reduce((s,p)=>s+p.monto,0),[pays]);
   const totalR=useMemo(()=>pays.reduce((s,p)=>s+splitAmount(p.monto).length,0),[pays]);
+  const uniqueProvs=useMemo(()=>new Set(pays.map(p=>cleanRut(p.rut))).size,[pays]);
+  const splitCount=useMemo(()=>pays.filter(p=>splitAmount(p.monto).length>1).length,[pays]);
+  const hasSplits=splitCount>0;
+  // ────────────────────────────────────────────────────────────────────────────
 
-  const dlTXT=()=>{if(!pays.length)return;const t=genTXT(pays,sups,cfg);const b=new Blob([t],{type:"text/plain;charset=utf-8"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;const d=new Date();a.download=`nomina_prov_${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}.txt`;a.click();URL.revokeObjectURL(u);};
-  const cpEmail=()=>{if(!pays.length)return;const html=genEmailHTML(pays,sups,cfg);const plain=genEmail(pays,sups,cfg);try{navigator.clipboard.write([new ClipboardItem({"text/html":new Blob([html],{type:"text/html"}),"text/plain":new Blob([plain],{type:"text/plain"})})]).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2500);});}catch(e){navigator.clipboard.writeText(plain).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2500);});}};
+  const dlTXT=()=>{
+    if(!pays.length)return;
+    const t=genTXT(pays,sups,cfg,nomDesc);
+    const b=new Blob([t],{type:"text/plain;charset=utf-8"});
+    const u=URL.createObjectURL(b);
+    const a=document.createElement("a");
+    a.href=u;
+    const d=new Date();
+    a.download=`nomina_prov_${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}.txt`;
+    a.click();
+    URL.revokeObjectURL(u);
+  };
+
+  const cpEmail=()=>{
+    if(!pays.length)return;
+    const html=genEmailHTML(pays,sups,cfg,nomDesc);
+    const plain=genEmail(pays,sups,cfg,nomDesc);
+    try{
+      navigator.clipboard.write([new ClipboardItem({
+        "text/html":new Blob([html],{type:"text/html"}),
+        "text/plain":new Blob([plain],{type:"text/plain"})
+      })]).then(()=>{
+        setCopied(true);
+        setTimeout(()=>setCopied(false),2500);
+        showToast(`✓ Email copiado · Total: ${formatCLP(totalP)}`);
+      });
+    }catch(e){
+      navigator.clipboard.writeText(plain).then(()=>{
+        setCopied(true);
+        setTimeout(()=>setCopied(false),2500);
+        showToast(`✓ Email copiado (texto plano) · ${formatCLP(totalP)}`);
+      });
+    }
+  };
 
   const addSup=async()=>{
     setMsg({t:"",x:""});const rut=cleanRut(ns.rut);
@@ -434,9 +559,22 @@ export default function App(){
         .bdg{font-size:10px;padding:1px 6px;border-radius:10px;font-weight:600}
         .es{text-align:center;padding:40px;color:#4A5568;border:2px dashed #1E2A40;border-radius:10px}
         .ib{background:none;border:none;color:#4A5568;cursor:pointer;padding:6px;display:flex;align-items:center;transition:color .15s}.ib:hover{color:#EF4444}
+        .desc-bar{display:flex;align-items:center;gap:10px;background:#111B2E;border:1px solid #1E2A40;border-radius:8px;padding:10px 14px;margin-bottom:16px}
+        .desc-bar-editing{border-color:#4A6FA5}
+        .toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:#0F2D1B;border:1px solid #1A5C2E;border-radius:10px;padding:12px 22px;color:#86EFAC;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;z-index:1000;box-shadow:0 8px 32px rgba(0,0,0,.5);pointer-events:none;animation:fadeUp .2s ease}
+        @keyframes fadeUp{from{opacity:0;transform:translateX(-50%) translateY(8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
         @media(max-width:640px){.g2,.g3{grid-template-columns:1fr}}
       `}</style>
 
+      {/* ── TOAST ─────────────────────────────────────────────────────────── */}
+      {toast && (
+        <div className="toast">
+          <Check size={15}/>
+          {toast}
+        </div>
+      )}
+
+      {/* ── HEADER ────────────────────────────────────────────────────────── */}
       <div style={{background:"linear-gradient(180deg,#111B2E,#0B1120)",borderBottom:"1px solid #1E2A40",padding:"16px 24px"}}>
         <div style={{maxWidth:960,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
           <div style={{display:"flex",alignItems:"center",gap:14}}>
@@ -451,6 +589,7 @@ export default function App(){
         </div>
       </div>
 
+      {/* ── TABS ──────────────────────────────────────────────────────────── */}
       <div style={{maxWidth:960,margin:"0 auto",padding:"0 24px",display:"flex",gap:2,marginTop:16}}>
         {tabData.map(t=><button key={t.id} onClick={()=>setTab(t.id)} className={`tb ${tab===t.id?"tba":""}`}>
           <t.Icon size={15}/>{t.label}
@@ -461,11 +600,48 @@ export default function App(){
       <div style={{maxWidth:960,margin:"0 auto",padding:"0 24px 40px"}}>
         <div style={{background:"#141C2E",border:"1px solid #1E2A40",borderRadius:"0 8px 8px 8px",padding:24}}>
 
+          {/* ═══════════════════════════════════════════════════════════════ */}
+          {/*  TAB: NÓMINA                                                   */}
+          {/* ═══════════════════════════════════════════════════════════════ */}
           {tab==="nomina"&&<div>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
               <h2 style={{fontSize:16,fontWeight:700,display:"flex",alignItems:"center",gap:8}}><FileText size={18} color="#E8952F"/>Nómina del {todayStr()}</h2>
               {pays.length>0&&<button className="bs" style={{padding:"6px 12px",fontSize:12}} onClick={clearAllPays}><Trash2 size={13}/>Limpiar</button>}
             </div>
+
+            {/* ── DESCRIPCIÓN EDITABLE ─────────────────────────────────── */}
+            <div className={`desc-bar${editingDesc?" desc-bar-editing":""}`}>
+              <FileText size={14} style={{color:"#E8952F",flexShrink:0}}/>
+              <span className="lbl" style={{margin:0,whiteSpace:"nowrap"}}>Descripción cabecera:</span>
+              {editingDesc ? (
+                <>
+                  <input
+                    type="text"
+                    value={descDraft}
+                    onChange={e=>setDescDraft(e.target.value.toUpperCase())}
+                    className="inp"
+                    style={{flex:1,padding:"6px 10px",fontSize:13,fontWeight:600,letterSpacing:.5}}
+                    onKeyDown={e=>{
+                      if(e.key==="Enter"){setNomDesc(descDraft.trim()||cfg.descripcion);setEditingDesc(false);}
+                      if(e.key==="Escape"){setEditingDesc(false);}
+                    }}
+                    autoFocus
+                  />
+                  <button className="bp" style={{padding:"6px 14px",fontSize:12,whiteSpace:"nowrap"}} onClick={()=>{setNomDesc(descDraft.trim()||cfg.descripcion);setEditingDesc(false);}}>
+                    <Check size={13}/>OK
+                  </button>
+                  <button className="ib" onClick={()=>setEditingDesc(false)} style={{color:"#6B7A94"}}><X size={14}/></button>
+                </>
+              ) : (
+                <>
+                  <span style={{flex:1,fontSize:13,fontWeight:700,color:"#E2E8F0",letterSpacing:.3}}>{nomDesc}</span>
+                  <button className="ib" style={{color:"#4A6FA5"}} onClick={()=>{setDescDraft(nomDesc);setEditingDesc(true);}} title="Editar descripción">
+                    <Pencil size={14}/>
+                  </button>
+                </>
+              )}
+            </div>
+            {/* ─────────────────────────────────────────────────────────── */}
 
             <div className="cd">
               <div style={{marginBottom:14}}><label className="lbl">Proveedor</label>
@@ -492,34 +668,92 @@ export default function App(){
               ? <div className="es"><ClipboardList size={32} style={{marginBottom:8,opacity:.4}}/><div style={{fontSize:14}}>No hay pagos</div><div style={{fontSize:12,marginTop:4}}>Busca un proveedor para comenzar</div></div>
               : <>
                   {pays.map((p, i) => (
-                    <PayRow
-                      key={p.id || i}
-                      p={p}
-                      sups={sups}
-                      onRemove={rmPay}
-                      onSave={savePay}
-                    />
+                    <PayRow key={p.id || i} p={p} sups={sups} onRemove={rmPay} onSave={savePay}/>
                   ))}
 
-                  <div style={{background:"#0F1729",borderRadius:10,padding:16,border:"1px solid #253048",marginTop:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <div className="tm" style={{fontSize:12}}>{pays.length} pagos · {totalR} registros TXT</div>
-                    <div style={{textAlign:"right"}}><div className="tm" style={{fontSize:11}}>TOTAL NÓMINA</div>
-                      <div className="tg" style={{fontSize:22,fontWeight:800,fontVariantNumeric:"tabular-nums"}}>{formatCLP(totalP)}</div>
+                  {/* ── PANEL DE TOTALES ENRIQUECIDO ──────────────────── */}
+                  <div style={{background:"#0F1729",borderRadius:10,padding:"14px 18px",border:"1px solid #253048",marginTop:16}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",gap:12,flexWrap:"wrap"}}>
+                      {/* Stats izquierda */}
+                      <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
+                        <div>
+                          <div className="tm" style={{fontSize:10,textTransform:"uppercase",letterSpacing:.5}}>Pagos</div>
+                          <div style={{fontSize:18,fontWeight:700,color:"#E2E8F0"}}>{pays.length}</div>
+                        </div>
+                        <div>
+                          <div className="tm" style={{fontSize:10,textTransform:"uppercase",letterSpacing:.5}}>Proveedores</div>
+                          <div style={{fontSize:18,fontWeight:700,color:"#E2E8F0"}}>{uniqueProvs}</div>
+                        </div>
+                        <div>
+                          <div className="tm" style={{fontSize:10,textTransform:"uppercase",letterSpacing:.5}}>Registros TXT</div>
+                          <div style={{fontSize:18,fontWeight:700,color:"#E2E8F0"}}>{totalR}</div>
+                        </div>
+                        {hasSplits&&(
+                          <div>
+                            <div className="tm" style={{fontSize:10,textTransform:"uppercase",letterSpacing:.5}}>Con Split</div>
+                            <div style={{fontSize:18,fontWeight:700,color:"#F59E0B"}}>{splitCount}</div>
+                          </div>
+                        )}
+                      </div>
+                      {/* Total derecha */}
+                      <div style={{textAlign:"right"}}>
+                        <div className="tm" style={{fontSize:11}}>TOTAL NÓMINA</div>
+                        <div className="tg" style={{fontSize:22,fontWeight:800,fontVariantNumeric:"tabular-nums"}}>{formatCLP(totalP)}</div>
+                      </div>
                     </div>
+                    {/* Aviso split si corresponde */}
+                    {hasSplits&&(
+                      <div style={{marginTop:10,padding:"7px 12px",background:"#2D1F0E",borderRadius:6,border:"1px solid #4A3000",display:"flex",alignItems:"center",gap:8,fontSize:12,color:"#F59E0B"}}>
+                        <AlertCircle size={13}/>
+                        {splitCount} pago{splitCount!==1?"s":""} se dividirá{splitCount!==1?"n":""} en múltiples transferencias por superar el límite de {formatCLP(MAX_TRANSFER)}.
+                        El TXT tendrá {totalR} líneas en lugar de {pays.length}.
+                      </div>
+                    )}
                   </div>
+                  {/* ────────────────────────────────────────────────────── */}
 
                   <div style={{display:"flex",gap:10,marginTop:16,flexWrap:"wrap"}}>
                     <button className="bp" onClick={dlTXT} style={{flex:1,justifyContent:"center"}}><Download size={16}/>Descargar TXT</button>
                     <button className="bs" onClick={cpEmail} style={{flex:1,justifyContent:"center"}}>{copied?<Check size={16} style={{color:"#4ADE80"}}/>:<Copy size={16}/>}{copied?"¡Copiado!":"Copiar Correo"}</button>
-                    <button className="bs" onClick={()=>setShowTxt(!showTxt)}><Eye size={16}/>TXT</button>
-                    <button className="bs" onClick={()=>setShowMail(!showMail)}><Mail size={16}/>Email</button>
+                    <button className="bs" onClick={()=>setShowTxt(!showTxt)}><Eye size={16}/>{showTxt?"Ocultar":"TXT"}</button>
+                    <button className="bs" onClick={()=>setShowMail(!showMail)}><Mail size={16}/>{showMail?"Ocultar":"Email"}</button>
                   </div>
-                  {showTxt&&<div className="cd" style={{marginTop:14,marginBottom:0}}><div className="cdt">Vista previa TXT:</div><pre style={{color:"#8B9AAF",fontSize:11,whiteSpace:"pre-wrap",wordBreak:"break-all",lineHeight:1.6}}>{genTXT(pays,sups,cfg)}</pre></div>}
-                  {showMail&&<div className="cd" style={{marginTop:14,marginBottom:0}}><div className="cdt">Correo:</div><div className="tm" style={{fontSize:12,marginBottom:2}}>Para: {cfg.para}</div><div className="tm" style={{fontSize:12,marginBottom:8}}>CC: {cfg.cc}</div><div style={{background:"#fff",borderRadius:6,padding:16}} dangerouslySetInnerHTML={{__html:genEmailHTML(pays,sups,cfg)}}/></div>}
+
+                  {showTxt&&(
+                    <div className="cd" style={{marginTop:14,marginBottom:0}}>
+                      <div className="cdt">Vista previa TXT:</div>
+                      <pre style={{color:"#8B9AAF",fontSize:11,whiteSpace:"pre-wrap",wordBreak:"break-all",lineHeight:1.6}}>
+                        {genTXT(pays,sups,cfg,nomDesc)}
+                      </pre>
+                    </div>
+                  )}
+
+                  {/* ── EMAIL PREVIEW CON IFRAME ──────────────────────── */}
+                  {showMail&&(
+                    <div className="cd" style={{marginTop:14,marginBottom:0}}>
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                        <div className="cdt" style={{margin:0}}>Vista previa del correo</div>
+                        <div style={{display:"flex",gap:12}}>
+                          <span className="tm" style={{fontSize:12}}>Para: <strong style={{color:"#E2E8F0"}}>{cfg.para}</strong></span>
+                          {cfg.cc&&<span className="tm" style={{fontSize:12}}>CC: <strong style={{color:"#E2E8F0"}}>{cfg.cc}</strong></span>}
+                        </div>
+                      </div>
+                      <iframe
+                        srcDoc={genEmailHTML(pays,sups,cfg,nomDesc)}
+                        style={{width:"100%",height:420,border:"1px solid #2D3A50",borderRadius:8,background:"#fff",display:"block"}}
+                        title="Vista previa email"
+                        sandbox="allow-same-origin"
+                      />
+                    </div>
+                  )}
+                  {/* ────────────────────────────────────────────────────── */}
                 </>
             }
           </div>}
 
+          {/* ═══════════════════════════════════════════════════════════════ */}
+          {/*  TAB: PROVEEDORES                                              */}
+          {/* ═══════════════════════════════════════════════════════════════ */}
           {tab==="proveedores"&&<div>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:10}}>
               <h2 style={{fontSize:16,fontWeight:700,display:"flex",alignItems:"center",gap:8}}>
@@ -549,7 +783,7 @@ export default function App(){
                 <div><label className="lbl">Tipo de Cuenta</label><select value={ns.tipoCuenta} onChange={e=>setNs({...ns,tipoCuenta:e.target.value})} className="inp">{ACCT_LIST.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
                 <div><label className="lbl">N° de Cuenta</label><input type="text" value={ns.numeroCuenta} onChange={e=>setNs({...ns,numeroCuenta:e.target.value})} placeholder="Sin guiones" className="inp"/></div>
               </div>
-              <div style={{marginBottom:14}}><label className="lbl">Email (opcional)</label><input type="email" value={ns.email} onChange={e=>setNs({...ns,email:e.target.value})} placeholder="correo@ejemplo.cl" className="inp" style={{maxWidth:350}}/></div>
+              <div style={{marginBottom:14}}><label className="lbl">Email (opcional)</label><input type="email" value={ns.email} onChange={e=>setNs({...ns,email:ns.email})} placeholder="correo@ejemplo.cl" className="inp" style={{maxWidth:350}}/></div>
               <button className="bp" onClick={addSup} disabled={adding}>{adding?<Loader2 size={16} className="spn"/>:<UserPlus size={16}/>}{adding?"Guardando...":"Agregar Proveedor"}</button>
             </div>}
 
@@ -565,6 +799,9 @@ export default function App(){
             </div>
           </div>}
 
+          {/* ═══════════════════════════════════════════════════════════════ */}
+          {/*  TAB: CONFIGURACIÓN                                            */}
+          {/* ═══════════════════════════════════════════════════════════════ */}
           {tab==="config"&&<div>
             <h2 style={{fontSize:16,fontWeight:700,marginBottom:20,display:"flex",alignItems:"center",gap:8}}><Settings size={18} color="#E8952F"/>Configuración</h2>
 
@@ -584,7 +821,11 @@ export default function App(){
               </div>
               <div className="g2">
                 <div><label className="lbl">Tipo de Servicio</label><input value={cfg.tipoServicio} readOnly className="inp" style={{opacity:.6}}/></div>
-                <div><label className="lbl">Descripción Cabecera</label><input value={cfg.descripcion} onChange={e=>setCfg({...cfg,descripcion:e.target.value})} className="inp"/></div>
+                <div>
+                  <label className="lbl">Descripción Cabecera (default)</label>
+                  <input value={cfg.descripcion} onChange={e=>setCfg({...cfg,descripcion:e.target.value.toUpperCase()})} className="inp"/>
+                  <div style={{fontSize:11,color:"#6B7A94",marginTop:4}}>Este valor se usa como base. Puedes sobreescribirlo por sesión en la pestaña Nómina.</div>
+                </div>
               </div>
               <div><label className="lbl">Email Notificación</label><input value={cfg.emailNotificacion} onChange={e=>setCfg({...cfg,emailNotificacion:e.target.value})} className="inp" style={{maxWidth:350}}/></div>
             </div>
