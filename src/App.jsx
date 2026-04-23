@@ -783,7 +783,7 @@ export default function App(){
                 <div><label className="lbl">Tipo de Cuenta</label><select value={ns.tipoCuenta} onChange={e=>setNs({...ns,tipoCuenta:e.target.value})} className="inp">{ACCT_LIST.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
                 <div><label className="lbl">N° de Cuenta</label><input type="text" value={ns.numeroCuenta} onChange={e=>setNs({...ns,numeroCuenta:e.target.value})} placeholder="Sin guiones" className="inp"/></div>
               </div>
-              <div style={{marginBottom:14}}><label className="lbl">Email (opcional)</label><input type="email" value={ns.email} onChange={e=>setNs({...ns,email:ns.email})} placeholder="correo@ejemplo.cl" className="inp" style={{maxWidth:350}}/></div>
+              <div style={{marginBottom:14}}><label className="lbl">Email (opcional)</label><input type="email" value={ns.email} onChange={e=>setNs({...ns,email:e.target.value})} placeholder="correo@ejemplo.cl" className="inp" style={{maxWidth:350}}/></div>
               <button className="bp" onClick={addSup} disabled={adding}>{adding?<Loader2 size={16} className="spn"/>:<UserPlus size={16}/>}{adding?"Guardando...":"Agregar Proveedor"}</button>
             </div>}
 
